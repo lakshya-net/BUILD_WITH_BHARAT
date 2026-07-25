@@ -37,18 +37,18 @@ function App() {
   const [form, setForm] = useState(INITIAL_FORM_STATE);
   const [mapPosition, setMapPosition] = useState(DEFAULT_COORDINATES);
   const [statusMessage, setStatusMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [isServerWakingUp, setIsServerWakingUp] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [isWakingUp, setIsWakingUp] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const severityRank = { High: 3, Medium: 2, Low: 1 };
 
   const fetchData = async () => {
-    setIsLoading(true);
-    setIsServerWakingUp(false);
+    setLoading(true);
+    setIsWakingUp(false);
     setErrorMessage('');
 
     const wakeupTimer = window.setTimeout(() => {
-      setIsServerWakingUp(true);
+      setIsWakingUp(true);
     }, 3000);
 
     try {
@@ -74,8 +74,8 @@ function App() {
       setStatusMessage(message);
     } finally {
       window.clearTimeout(wakeupTimer);
-      setIsServerWakingUp(false);
-      setIsLoading(false);
+      setIsWakingUp(false);
+      setLoading(false);
     }
   };
 
@@ -188,7 +188,11 @@ function App() {
         </div>
       </header>
 
-      {activeView === 'news' ? (
+      {loading ? (
+        <section className="panel loading-panel">
+          <p>{isWakingUp ? 'Waking up the government servers... (Our free-tier backend takes about 45 seconds to boot. Hang tight!)' : 'Loading data...'}</p>
+        </section>
+      ) : activeView === 'news' ? (
         <section className="news-page-grid">
           <div className="panel">
             <div className="panel-header">
@@ -225,12 +229,6 @@ function App() {
         </section>
       ) : (
         <>
-          {isLoading ? (
-            <section className="panel loading-panel">
-              <p>{isServerWakingUp ? 'Waking up the server... this might take up to a minute on the first load.' : 'Loading dashboard data…'}</p>
-            </section>
-          ) : null}
-
           {errorMessage ? (
             <section className="panel loading-panel error-panel">
               <p>{errorMessage}</p>
