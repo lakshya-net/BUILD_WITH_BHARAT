@@ -19,15 +19,11 @@ Technology choices used in the prototype
 - Authentication: demo-local flow in the prototype (free alternative to Firebase Authentication)
 - Storage: local app-side demo persistence (free alternative to cloud storage)
 
-Run locally
-1. npm install
-2. npm run build
-3. npm run start:prototype
 
-Open the UI at http://localhost:5173 and the API at http://localhost:3001/api/health.
 
-One-command startup
-- npm run start:prototype
+Open the app at https://civicpulsebharat.vercel.app
+
+
 
 Prototype workflow
 1. Citizen reports issue through the form
