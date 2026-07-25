@@ -227,7 +227,18 @@ function App() {
         <>
           {isLoading ? (
             <section className="panel loading-panel">
-              <p>{isServerWakingUp ? 'Waking up the server... this might take up to a minute on the first load.' : 'Loading dashboard data…'}</p>
+              {isServerWakingUp ? (
+                <div className="wakeup-message">
+                  <h2>🚀 Waking up the government servers...</h2>
+                  <p>Our free-tier backend takes about 45 seconds to boot. Hang tight!</p>
+                  <div className="spinner"></div>
+                </div>
+              ) : (
+                <div className="standard-loading">
+                  <p>Loading data…</p>
+                  <div className="spinner"></div>
+                </div>
+              )}
             </section>
           ) : null}
 
