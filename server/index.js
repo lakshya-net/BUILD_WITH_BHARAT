@@ -149,6 +149,11 @@ function initializeDatabase() {
       status TEXT,
       contractor TEXT,
       summary TEXT,
+      reporter_name TEXT,
+      reporter_email TEXT,
+      reporter_phone TEXT,
+      reporter_aadhar TEXT,
+      reporter_role TEXT,
       created_at INTEGER NOT NULL
     )
   `);
@@ -158,6 +163,22 @@ function initializeDatabase() {
   } catch (_error) {
     // Column already exists in a previously initialized DB.
   }
+  // Add reporter columns if they don't exist yet (silent catch if already present)
+  try {
+    db.run('ALTER TABLE issues ADD COLUMN reporter_name TEXT');
+  } catch (_error) {}
+  try {
+    db.run('ALTER TABLE issues ADD COLUMN reporter_email TEXT');
+  } catch (_error) {}
+  try {
+    db.run('ALTER TABLE issues ADD COLUMN reporter_phone TEXT');
+  } catch (_error) {}
+  try {
+    db.run('ALTER TABLE issues ADD COLUMN reporter_aadhar TEXT');
+  } catch (_error) {}
+  try {
+    db.run('ALTER TABLE issues ADD COLUMN reporter_role TEXT');
+  } catch (_error) {}
 
   const countStatement = db.prepare('SELECT COUNT(*) as count FROM issues');
   const existingCountResult = countStatement.getAsObject();
@@ -204,7 +225,12 @@ function issueRowToObject(row) {
     affectedPeople: Number(row.affectedPeople),
     status: row.status,
     contractor: row.contractor,
-    summary: row.summary || ''
+    summary: row.summary || '',
+    reporter_name: row.reporter_name || null,
+    reporter_email: row.reporter_email || null,
+    reporter_phone: row.reporter_phone || null,
+    reporter_aadhar: row.reporter_aadhar || null,
+    reporter_role: row.reporter_role || null
   };
 }
 
@@ -334,7 +360,7 @@ app.get('/api/issues', (_req, res) => {
 });
 
 app.post('/api/issues', async (req, res) => {
-  const { title, description, location, lat, lng } = req.body || {};
+  const { title, description, location, lat, lng, reporter_name, reporter_email, reporter_phone, reporter_aadhar, reporter_role } = req.body || {};
   if (!title || !description || !location) {
     return res.status(400).json({ message: 'title, description, and location are required' });
   }
@@ -353,12 +379,17 @@ app.post('/api/issues', async (req, res) => {
     affectedPeople: analysis.affectedPeople,
     status: analysis.status,
     contractor: analysis.contractor,
-    summary: analysis.summary
+    summary: analysis.summary,
+    reporter_name: reporter_name || null,
+    reporter_email: reporter_email || null,
+    reporter_phone: reporter_phone || null,
+    reporter_aadhar: reporter_aadhar || null,
+    reporter_role: reporter_role || null
   };
 
   db.run(
-    `INSERT INTO issues (id, title, description, category, location, lat, lng, severity, authenticity, affectedPeople, status, contractor, summary, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO issues (id, title, description, category, location, lat, lng, severity, authenticity, affectedPeople, status, contractor, summary, reporter_name, reporter_email, reporter_phone, reporter_aadhar, reporter_role, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newIssue.id,
       newIssue.title,
@@ -373,6 +404,11 @@ app.post('/api/issues', async (req, res) => {
       newIssue.status,
       newIssue.contractor,
       newIssue.summary,
+      newIssue.reporter_name,
+      newIssue.reporter_email,
+      newIssue.reporter_phone,
+      newIssue.reporter_aadhar,
+      newIssue.reporter_role,
       Date.now()
     ]
   );
