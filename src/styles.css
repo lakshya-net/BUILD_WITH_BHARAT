@@ -236,6 +236,107 @@ button:focus-visible,
   resize: vertical;
 }
 
+.photo-upload {
+  min-height: 128px;
+  padding: 20px;
+  border: 2px dashed rgba(31, 57, 99, 0.25);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(255, 153, 51, 0.08), rgba(19, 136, 8, 0.06));
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 5px;
+  text-align: center;
+  color: var(--navy);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.photo-upload:hover {
+  border-color: var(--green);
+  background: linear-gradient(135deg, rgba(255, 153, 51, 0.13), rgba(19, 136, 8, 0.1));
+  transform: translateY(-1px);
+}
+
+.photo-upload small,
+.analysis-card small {
+  color: var(--muted);
+}
+
+.photo-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.upload-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: #fff;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.photo-preview,
+.issue-photo {
+  width: 100%;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid #dbe6f2;
+}
+
+.photo-preview {
+  max-height: 220px;
+}
+
+.issue-photo {
+  height: 150px;
+  margin: 4px 0;
+}
+
+.analysis-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 12px;
+  align-items: start;
+  padding: 13px;
+  border: 1px solid rgba(19, 136, 8, 0.25);
+  border-radius: 12px;
+  background: #f4fbf5;
+}
+
+.analysis-card p {
+  margin: 4px 0 0;
+  color: #39516a;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.analysis-card small {
+  grid-column: 2;
+}
+
+.analysis-card.analyzing {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  color: var(--navy);
+}
+
+.mini-spinner {
+  width: 20px;
+  height: 20px;
+  border: 3px solid rgba(31, 57, 99, 0.16);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
 .inline-fields {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -261,6 +362,14 @@ button:hover {
   transform: translateY(-1px);
   box-shadow: 0 10px 20px rgba(19, 136, 8, 0.18);
   filter: saturate(1.05);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: grayscale(0.25);
+  transform: none;
+  box-shadow: none;
 }
 
 .status-line {

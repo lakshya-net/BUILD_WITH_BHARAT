@@ -5,11 +5,10 @@ import { getApiUrl } from './config';
 
 const DEFAULT_COORDINATES = [28.6139, 77.209];
 const INITIAL_FORM_STATE = {
-  title: '',
-  description: '',
   location: '',
   lat: '28.6139',
-  lng: '77.2090'
+  lng: '77.2090',
+  imageData: ''
 };
 
 const markerIcon = L.divIcon({
@@ -40,6 +39,9 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isServerWakingUp, setIsServerWakingUp] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [imageAnalysis, setImageAnalysis] = useState(null);
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [imageInputKey, setImageInputKey] = useState(0);
   const severityRank = { High: 3, Medium: 2, Low: 1 };
 
   const fetchData = async () => {
@@ -126,15 +128,67 @@ function App() {
     }
   };
 
+  const handleImageChange = (event) => {
+    const image = event.target.files?.[0];
+    setImageAnalysis(null);
+
+    if (!image) {
+      setForm((currentForm) => ({ ...currentForm, imageData: '' }));
+      return;
+    }
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(image.type) || image.size > 5 * 1024 * 1024) {
+      setStatusMessage('Please choose a JPG, PNG, or WebP photo smaller than 5 MB.');
+      event.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const imageData = reader.result;
+      setForm((currentForm) => ({ ...currentForm, imageData }));
+      setIsAnalyzingImage(true);
+      setStatusMessage('AI is inspecting your photo…');
+
+      try {
+        const response = await fetch(getApiUrl('/api/analyze-image'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageData })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'Unable to analyze image');
+
+        setImageAnalysis(result);
+        setStatusMessage(`AI detected ${result.category} (${result.confidence}% confidence).`);
+      } catch (error) {
+        console.error(error);
+        setStatusMessage(error.message || 'Unable to analyze image. Please try another photo.');
+      } finally {
+        setIsAnalyzingImage(false);
+      }
+    };
+    reader.readAsDataURL(image);
+  };
+
   const submitIssue = async (event) => {
     event.preventDefault();
 
+    if (!form.imageData) {
+      setStatusMessage('Upload a photo before submitting the report.');
+      return;
+    }
+
+    if (!imageAnalysis || isAnalyzingImage) {
+      setStatusMessage('Please wait for AI image analysis to finish before submitting.');
+      return;
+    }
+
     const payload = {
-      title: form.title,
-      description: form.description,
       location: form.location,
       lat: form.lat,
-      lng: form.lng
+      lng: form.lng,
+      imageData: form.imageData
     };
 
     try {
@@ -153,6 +207,8 @@ function App() {
       setStatusMessage(data.message || 'Issue reported');
       await fetchData();
       setForm(INITIAL_FORM_STATE);
+      setImageAnalysis(null);
+      setImageInputKey((currentKey) => currentKey + 1);
       setMapPosition(DEFAULT_COORDINATES);
     } catch (error) {
       console.error(error);
@@ -300,17 +356,46 @@ function App() {
 
             <div className="panel">
               <div className="panel-header">
-                <h2>Citizen issue intake</h2>
-                <p>Use the demo form to simulate an AI-classified report</p>
+                <h2>Photo-based issue reporting</h2>
+                <p>Upload a clear photo and AI will detect the civic issue before you submit it</p>
               </div>
               <form className="report-form" onSubmit={submitIssue}>
-                <input placeholder="Issue title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required />
-                <textarea placeholder="Describe the issue" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} required />
+                <label className="photo-upload" htmlFor="issue-photo">
+                  <span className="upload-icon">⌁</span>
+                  <strong>Upload an issue photo</strong>
+                  <small>JPG, PNG, or WebP · up to 5 MB</small>
+                  <input
+                    key={imageInputKey}
+                    id="issue-photo"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    capture="environment"
+                    onChange={handleImageChange}
+                    required
+                  />
+                </label>
+                {form.imageData ? <img className="photo-preview" src={form.imageData} alt="Selected issue" /> : null}
+                {isAnalyzingImage ? (
+                  <div className="analysis-card analyzing">
+                    <div className="mini-spinner"></div>
+                    <span>Detecting issue from your image…</span>
+                  </div>
+                ) : null}
+                {imageAnalysis ? (
+                  <div className="analysis-card">
+                    <span className={`badge ${imageAnalysis.severity.toLowerCase()}`}>{imageAnalysis.severity} severity</span>
+                    <div>
+                      <strong>{imageAnalysis.category}</strong>
+                      <p>{imageAnalysis.summary}</p>
+                    </div>
+                    <small>Vision AI confidence: {imageAnalysis.confidence}%</small>
+                  </div>
+                ) : null}
                 <div className="inline-fields location-field-row">
                   <input placeholder="Address / Location" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} required />
                   <button type="button" onClick={handleFindOnMap}>Find on Map</button>
                 </div>
-                <button type="submit">Submit for AI classification</button>
+                <button type="submit" disabled={!imageAnalysis || isAnalyzingImage}>Submit AI-classified report</button>
                 <p className="status-line">{statusMessage}</p>
               </form>
             </div>
@@ -330,6 +415,7 @@ function App() {
                       <span>{issue.category}</span>
                     </div>
                     <h3>{issue.title}</h3>
+                    {issue.photoUrl ? <img className="issue-photo" src={getApiUrl(issue.photoUrl)} alt={`Reported ${issue.category}`} /> : null}
                     <p>{issue.description}</p>
                     {issue.summary ? <p className="summary-text">AI summary: {issue.summary}</p> : null}
                     <div className="meta-row">

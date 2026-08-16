@@ -3,8 +3,8 @@
 A free-resource prototype for India’s community-powered infrastructure operating system.
 
 What this prototype demonstrates
-- Citizen issue reporting intake with a React-driven UI
-- AI classification of reports into category, severity, authenticity, and affected population
+- Photo-based citizen issue reporting intake with a React-driven UI
+- On-device-style AI vision classification of issue photos into category, severity, confidence, and affected population
 - Priority ranking of issues on the homepage
 - Contractor allotment workflow and transparent repair tracking
 - News and funding updates for patrons and authorities
@@ -26,8 +26,8 @@ Open the app at https://civicpulsebharat.vercel.app
 
 
 Prototype workflow
-1. Citizen reports issue through the form
-2. Backend classifies category/severity and estimates affected people   using ai
+1. Citizen uploads an issue photo and selects its location
+2. Backend vision AI detects the issue category, confidence, and severity from the photo
 3. Priority queue ranks the issue on the homepage
 4. Contractor and progress status are surfaced in the dashboard
 5. News and funding sections show public transparency updates

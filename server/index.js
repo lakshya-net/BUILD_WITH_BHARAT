@@ -2,6 +2,7 @@
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import initSqlJs from 'sql.js';
 import { pipeline } from '@xenova/transformers';
@@ -14,10 +15,20 @@ const __dirname = path.dirname(__filename);
 const distPath = path.resolve(__dirname, '..', 'dist');
 const dbDirectory = path.resolve(__dirname, 'data');
 const dbPath = path.resolve(dbDirectory, 'civicpulse.sqlite');
+const uploadDirectory = path.resolve(__dirname, 'uploads');
 const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
-let aiClassifier = null;
-let aiSummarizer = null;
-const aiLabels = ['Road Repair', 'Drainage', 'Water Supply', 'Public Safety', 'Waste Management', 'Urban Greening', 'Traffic', 'General Infrastructure'];
+let visionClassifier = null;
+let visionInitializationPromise = null;
+const visionLabels = [
+  { label: 'Road Repair', prompt: 'a pothole, cracked road, or damaged pavement' },
+  { label: 'Drainage', prompt: 'an overflowing drain, blocked gutter, or open sewer' },
+  { label: 'Water Supply', prompt: 'a leaking pipe, water leak, or broken water supply' },
+  { label: 'Public Safety', prompt: 'a broken streetlight, unsafe public space, or exposed hazard' },
+  { label: 'Waste Management', prompt: 'garbage, illegal dumping, or overflowing waste' },
+  { label: 'Urban Greening', prompt: 'a fallen tree, damaged park, or neglected greenery' },
+  { label: 'Traffic', prompt: 'a broken traffic signal, traffic obstruction, or damaged road sign' },
+  { label: 'General Infrastructure', prompt: 'damaged public infrastructure' }
+];
 
 const seedIssues = [
   {
@@ -119,6 +130,7 @@ const newsItems = {
 };
 
 fs.mkdirSync(dbDirectory, { recursive: true });
+fs.mkdirSync(uploadDirectory, { recursive: true });
 
 const SQL = await initSqlJs({
   locateFile: (file) => path.resolve(__dirname, '..', 'node_modules', 'sql.js', 'dist', file)
@@ -149,12 +161,19 @@ function initializeDatabase() {
       status TEXT,
       contractor TEXT,
       summary TEXT,
+      photo_url TEXT,
       created_at INTEGER NOT NULL
     )
   `);
 
   try {
     db.run('ALTER TABLE issues ADD COLUMN summary TEXT');
+  } catch (_error) {
+    // Column already exists in a previously initialized DB.
+  }
+
+  try {
+    db.run('ALTER TABLE issues ADD COLUMN photo_url TEXT');
   } catch (_error) {
     // Column already exists in a previously initialized DB.
   }
@@ -204,7 +223,8 @@ function issueRowToObject(row) {
     affectedPeople: Number(row.affectedPeople),
     status: row.status,
     contractor: row.contractor,
-    summary: row.summary || ''
+    summary: row.summary || '',
+    photoUrl: row.photo_url || ''
   };
 }
 
@@ -218,91 +238,92 @@ function getIssuesFromDatabase() {
   return rows.map(issueRowToObject);
 }
 
-async function initializeAiStack() {
-  try {
-    aiClassifier = await pipeline('zero-shot-classification', 'Xenova/mobilebert-uncased-mnli');
-    aiSummarizer = await pipeline('summarization', 'Xenova/distilbart-cnn-12-6');
-    return true;
-  } catch (error) {
-    console.warn('AI stack initialization failed; falling back to heuristic classification.', error.message);
-    return false;
+function initializeVisionStack() {
+  if (!visionInitializationPromise) {
+    visionInitializationPromise = pipeline('zero-shot-image-classification', 'Xenova/clip-vit-base-patch32')
+      .then((classifier) => {
+        visionClassifier = classifier;
+        return classifier;
+      })
+      .catch((error) => {
+        visionInitializationPromise = null;
+        throw error;
+      });
   }
+  return visionInitializationPromise;
 }
 
-async function generateAiSummary(text) {
-  if (!aiSummarizer) return '';
-  try {
-    const result = await aiSummarizer(text.slice(0, 250), { max_new_tokens: 45 });
-    return result?.[0]?.summary_text || '';
-  } catch (_error) {
-    return '';
+function parseImageData(imageData) {
+  const matches = /^data:(image\/(?:jpeg|png|webp));base64,([a-zA-Z0-9+/=]+)$/.exec(imageData || '');
+  if (!matches) throw new Error('Please upload a JPG, PNG, or WebP image.');
+
+  const buffer = Buffer.from(matches[2], 'base64');
+  if (!buffer.length || buffer.length > 5 * 1024 * 1024) {
+    throw new Error('Image must be smaller than 5 MB.');
   }
+
+  const extension = matches[1] === 'image/jpeg' ? 'jpg' : matches[1].split('/')[1];
+  return { buffer, extension };
 }
 
-async function classifyIssue({ title = '', description = '', location = '' }) {
-  const text = `${title} ${description} ${location}`.trim();
-  const keywordText = text.toLowerCase();
-
-  const categoryMap = [
-    ['road', 'Road Repair'],
-    ['pothole', 'Road Repair'],
-    ['drain', 'Drainage'],
-    ['water', 'Water Supply'],
-    ['sewer', 'Water Supply'],
-    ['streetlight', 'Public Safety'],
-    ['light', 'Public Safety'],
-    ['waste', 'Waste Management'],
-    ['garbage', 'Waste Management'],
-    ['tree', 'Urban Greening'],
-    ['signal', 'Traffic'],
-    ['traffic', 'Traffic']
-  ];
-
-  const fallbackCategory = categoryMap.find(([key]) => keywordText.includes(key))?.[1] || 'General Infrastructure';
-  let severity = 'Low';
-  if (/(flood|overflow|collapse|danger|accident|health)/i.test(keywordText)) severity = 'High';
-  else if (/(road|pothole|streetlight|drain|water)/i.test(keywordText)) severity = 'Medium';
-
-  const affectedPeople = keywordText.includes('school') ? 200 : keywordText.includes('market') ? 350 : 95;
-  const authenticity = /verify|verified|community/i.test(keywordText)
-    ? 'Community verified by 3+ residents'
-    : 'AI confidence 91% with manual review pending';
-
-  let category = fallbackCategory;
-  let aiSummary = '';
-
-  if (aiClassifier) {
-    try {
-      const classificationResult = await aiClassifier(text, aiLabels, { multi_label: false });
-      category = classificationResult?.labels?.[0] || fallbackCategory;
-    } catch (_error) {
-      category = fallbackCategory;
-    }
-  }
-
-  if (aiSummarizer) {
-    aiSummary = await generateAiSummary(text);
-  }
-
-  return {
-    category,
-    severity,
-    authenticity,
-    affectedPeople,
-    status: 'Awaiting contractor allotment',
-    contractor: 'Pending allocation',
-    summary: aiSummary || `${title}. ${description}`.slice(0, 180)
+function createIssueTitle(category) {
+  const titles = {
+    'Road Repair': 'Road damage reported from photo',
+    Drainage: 'Drainage issue reported from photo',
+    'Water Supply': 'Water supply issue reported from photo',
+    'Public Safety': 'Public safety hazard reported from photo',
+    'Waste Management': 'Waste management issue reported from photo',
+    'Urban Greening': 'Urban greenery issue reported from photo',
+    Traffic: 'Traffic infrastructure issue reported from photo',
+    'General Infrastructure': 'Public infrastructure issue reported from photo'
   };
+  return titles[category] || titles['General Infrastructure'];
+}
+
+function imageSeverity(category) {
+  if (category === 'Drainage' || category === 'Public Safety') return 'High';
+  if (['Road Repair', 'Water Supply', 'Traffic', 'Waste Management'].includes(category)) return 'Medium';
+  return 'Low';
+}
+
+async function analyzeIssueImage(imageData) {
+  const imageHash = crypto.createHash('sha256').update(imageData).digest('hex');
+  const cacheKey = `image-analysis:${imageHash}`;
+  const cachedAnalysis = cache.get(cacheKey);
+  if (cachedAnalysis) return cachedAnalysis;
+
+  const { buffer, extension } = parseImageData(imageData);
+  const temporaryPath = path.join(uploadDirectory, `analysis-${imageHash}.${extension}`);
+  fs.writeFileSync(temporaryPath, buffer);
+
+  try {
+    const classifier = await initializeVisionStack();
+    const results = await classifier(temporaryPath, visionLabels.map((item) => item.prompt));
+    const match = results?.[0];
+    const matchedLabel = visionLabels.find((item) => item.prompt === match?.label);
+    const category = matchedLabel?.label || 'General Infrastructure';
+    const confidence = Math.round((match?.score || 0) * 100);
+    const analysis = {
+      category,
+      confidence,
+      severity: imageSeverity(category),
+      title: createIssueTitle(category),
+      summary: `AI detected ${category.toLowerCase()} from the uploaded photo with ${confidence}% confidence.`
+    };
+    cache.set(cacheKey, analysis, 3600);
+    return analysis;
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
 }
 
 initializeDatabase();
-const aiInitializationPromise = initializeAiStack();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '7mb' }));
+app.use('/uploads', express.static(uploadDirectory));
 
-app.get('/api/health', async (_req, res) => {
-  const aiReady = await aiInitializationPromise.catch(() => false);
+app.get('/api/health', (_req, res) => {
   res.json({
     healthy: true,
     services: ['express', 'leaflet-ui', 'sqlite-persistence', 'cache-layer'],
@@ -314,9 +335,9 @@ app.get('/api/health', async (_req, res) => {
       enabled: true,
       ttlSeconds: 300
     },
-    ai: {
-      provider: 'Xenova Transformers (free local stack)',
-      status: aiReady ? 'ready' : 'fallback-heuristic'
+    vision: {
+      provider: 'CLIP zero-shot image classification',
+      status: visionClassifier ? 'ready' : 'loaded on first image analysis'
     }
   });
 });
@@ -333,32 +354,55 @@ app.get('/api/issues', (_req, res) => {
   return res.json(issues);
 });
 
+app.post('/api/analyze-image', async (req, res) => {
+  try {
+    const analysis = await analyzeIssueImage(req.body?.imageData);
+    res.json(analysis);
+  } catch (error) {
+    console.error('Image analysis failed:', error.message);
+    res.status(422).json({ message: 'Unable to analyze this image. Please use a clear JPG, PNG, or WebP photo.' });
+  }
+});
+
 app.post('/api/issues', async (req, res) => {
-  const { title, description, location, lat, lng } = req.body || {};
-  if (!title || !description || !location) {
-    return res.status(400).json({ message: 'title, description, and location are required' });
+  const { imageData, location, lat, lng } = req.body || {};
+  if (!imageData || !location) {
+    return res.status(400).json({ message: 'an image and location are required' });
   }
 
-  const analysis = await classifyIssue({ title, description, location });
+  let visionAnalysis;
+  let image;
+  try {
+    visionAnalysis = await analyzeIssueImage(imageData);
+    image = parseImageData(imageData);
+  } catch (error) {
+    return res.status(422).json({ message: error.message || 'Unable to analyze this image.' });
+  }
+
+  const imageFileName = `${Date.now()}-${crypto.randomUUID()}.${image.extension}`;
+  fs.writeFileSync(path.join(uploadDirectory, imageFileName), image.buffer);
+  const photoUrl = `/uploads/${imageFileName}`;
+  const description = visionAnalysis.summary;
   const newIssue = {
     id: `issue-${Date.now()}`,
-    title,
+    title: visionAnalysis.title,
     description,
-    category: analysis.category,
+    category: visionAnalysis.category,
     location,
     lat: Number(lat) || 28.6139,
     lng: Number(lng) || 77.209,
-    severity: analysis.severity,
-    authenticity: analysis.authenticity,
-    affectedPeople: analysis.affectedPeople,
-    status: analysis.status,
-    contractor: analysis.contractor,
-    summary: analysis.summary
+    severity: visionAnalysis.severity,
+    authenticity: `AI image confidence ${visionAnalysis.confidence}% with manual review pending`,
+    affectedPeople: visionAnalysis.category === 'Public Safety' ? 200 : visionAnalysis.category === 'Drainage' ? 350 : 95,
+    status: 'Awaiting contractor allotment',
+    contractor: 'Pending allocation',
+    summary: visionAnalysis.summary,
+    photoUrl
   };
 
   db.run(
-    `INSERT INTO issues (id, title, description, category, location, lat, lng, severity, authenticity, affectedPeople, status, contractor, summary, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO issues (id, title, description, category, location, lat, lng, severity, authenticity, affectedPeople, status, contractor, summary, photo_url, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newIssue.id,
       newIssue.title,
@@ -373,6 +417,7 @@ app.post('/api/issues', async (req, res) => {
       newIssue.status,
       newIssue.contractor,
       newIssue.summary,
+      newIssue.photoUrl,
       Date.now()
     ]
   );
@@ -389,9 +434,18 @@ app.delete('/api/issues/:id', (req, res) => {
     return res.status(400).json({ message: 'Issue id is required' });
   }
 
+  const existingIssueStatement = db.prepare('SELECT photo_url FROM issues WHERE id = ?');
+  existingIssueStatement.bind([id]);
+  const existingIssue = existingIssueStatement.step() ? existingIssueStatement.getAsObject() : null;
+  existingIssueStatement.free();
+
   const result = db.run('DELETE FROM issues WHERE id = ?', [id]);
   if (result.changes === 0) {
     return res.status(404).json({ message: 'Issue not found' });
+  }
+
+  if (existingIssue?.photo_url) {
+    fs.rmSync(path.join(uploadDirectory, path.basename(existingIssue.photo_url)), { force: true });
   }
 
   saveDatabase();
