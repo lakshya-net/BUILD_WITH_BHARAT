@@ -8,7 +8,7 @@ const INITIAL_FORM_STATE = {
   location: '',
   lat: '28.6139',
   lng: '77.2090',
-  imageData: ''
+  images: []
 };
 
 const markerIcon = L.divIcon({
@@ -128,54 +128,75 @@ function App() {
     }
   };
 
-  const handleImageChange = (event) => {
-    const image = event.target.files?.[0];
-    setImageAnalysis(null);
-
-    if (!image) {
-      setForm((currentForm) => ({ ...currentForm, imageData: '' }));
+  const analyzeImages = async (images) => {
+    if (!images.length) {
+      setImageAnalysis(null);
+      setStatusMessage('');
       return;
     }
 
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(image.type) || image.size > 5 * 1024 * 1024) {
-      setStatusMessage('Please choose a JPG, PNG, or WebP photo smaller than 5 MB.');
+    setImageAnalysis(null);
+    setIsAnalyzingImage(true);
+    setStatusMessage(`AI is inspecting ${images.length} photo${images.length === 1 ? '' : 's'}…`);
+
+    try {
+      const response = await fetch(getApiUrl('/api/analyze-image'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Unable to analyze images');
+
+      setImageAnalysis(result);
+      setStatusMessage(`AI detected ${result.category} (${result.confidence}% confidence).`);
+    } catch (error) {
+      console.error(error);
+      setStatusMessage(error.message || 'Unable to analyze images. Please try another photo.');
+    } finally {
+      setIsAnalyzingImage(false);
+    }
+  };
+
+  const handleImageChange = async (event) => {
+    const selectedFiles = Array.from(event.target.files || []);
+    const validFiles = selectedFiles.filter((image) => ['image/jpeg', 'image/png', 'image/webp'].includes(image.type) && image.size <= 5 * 1024 * 1024);
+
+    if (validFiles.length !== selectedFiles.length) {
+      setStatusMessage('Only JPG, PNG, or WebP photos smaller than 5 MB can be added.');
+    }
+
+    const remainingSlots = 4 - form.images.length;
+    const filesToAdd = validFiles.slice(0, remainingSlots);
+    if (!filesToAdd.length) {
+      if (remainingSlots <= 0) setStatusMessage('You can upload up to 4 issue photos.');
       event.target.value = '';
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const imageData = reader.result;
-      setForm((currentForm) => ({ ...currentForm, imageData }));
-      setIsAnalyzingImage(true);
-      setStatusMessage('AI is inspecting your photo…');
+    const dataUrls = await Promise.all(filesToAdd.map((image) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Unable to read the selected photo.'));
+      reader.readAsDataURL(image);
+      })));
+    const nextImages = [...form.images, ...dataUrls];
+    setForm((currentForm) => ({ ...currentForm, images: nextImages }));
+    setImageInputKey((currentKey) => currentKey + 1);
+    await analyzeImages(nextImages);
+  };
 
-      try {
-        const response = await fetch(getApiUrl('/api/analyze-image'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageData })
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.message || 'Unable to analyze image');
-
-        setImageAnalysis(result);
-        setStatusMessage(`AI detected ${result.category} (${result.confidence}% confidence).`);
-      } catch (error) {
-        console.error(error);
-        setStatusMessage(error.message || 'Unable to analyze image. Please try another photo.');
-      } finally {
-        setIsAnalyzingImage(false);
-      }
-    };
-    reader.readAsDataURL(image);
+  const removeSelectedImage = async (index) => {
+    const nextImages = form.images.filter((_, imageIndex) => imageIndex !== index);
+    setForm((currentForm) => ({ ...currentForm, images: nextImages }));
+    await analyzeImages(nextImages);
   };
 
   const submitIssue = async (event) => {
     event.preventDefault();
 
-    if (!form.imageData) {
-      setStatusMessage('Upload a photo before submitting the report.');
+    if (!form.images.length) {
+      setStatusMessage('Upload at least one photo before submitting the report.');
       return;
     }
 
@@ -188,7 +209,7 @@ function App() {
       location: form.location,
       lat: form.lat,
       lng: form.lng,
-      imageData: form.imageData
+      images: form.images
     };
 
     try {
@@ -362,19 +383,30 @@ function App() {
               <form className="report-form" onSubmit={submitIssue}>
                 <label className="photo-upload" htmlFor="issue-photo">
                   <span className="upload-icon">⌁</span>
-                  <strong>Upload an issue photo</strong>
-                  <small>JPG, PNG, or WebP · up to 5 MB</small>
+                  <strong>Add issue photos</strong>
+                  <small>JPG, PNG, or WebP · up to 4 photos, 5 MB each</small>
                   <input
                     key={imageInputKey}
                     id="issue-photo"
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
                     capture="environment"
+                    multiple
                     onChange={handleImageChange}
-                    required
                   />
                 </label>
-                {form.imageData ? <img className="photo-preview" src={form.imageData} alt="Selected issue" /> : null}
+                {form.images.length ? (
+                  <div className="photo-preview-grid">
+                    {form.images.map((image, index) => (
+                      <div className="selected-photo" key={image}>
+                        <img className="photo-preview" src={image} alt={`Selected issue ${index + 1}`} />
+                        <button type="button" className="remove-photo-btn" onClick={() => removeSelectedImage(index)} aria-label={`Remove photo ${index + 1}`}>
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {isAnalyzingImage ? (
                   <div className="analysis-card analyzing">
                     <div className="mini-spinner"></div>
@@ -415,7 +447,13 @@ function App() {
                       <span>{issue.category}</span>
                     </div>
                     <h3>{issue.title}</h3>
-                    {issue.photoUrl ? <img className="issue-photo" src={getApiUrl(issue.photoUrl)} alt={`Reported ${issue.category}`} /> : null}
+                    {(issue.photoUrls?.length ? issue.photoUrls : issue.photoUrl ? [issue.photoUrl] : []).length ? (
+                      <div className="issue-photo-grid">
+                        {(issue.photoUrls?.length ? issue.photoUrls : [issue.photoUrl]).map((photoUrl, index) => (
+                          <img key={photoUrl} className="issue-photo" src={getApiUrl(photoUrl)} alt={`Reported ${issue.category} ${index + 1}`} />
+                        ))}
+                      </div>
+                    ) : null}
                     <p>{issue.description}</p>
                     {issue.summary ? <p className="summary-text">AI summary: {issue.summary}</p> : null}
                     <div className="meta-row">

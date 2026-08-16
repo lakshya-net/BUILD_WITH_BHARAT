@@ -162,6 +162,7 @@ function initializeDatabase() {
       contractor TEXT,
       summary TEXT,
       photo_url TEXT,
+      photo_urls TEXT,
       created_at INTEGER NOT NULL
     )
   `);
@@ -174,6 +175,12 @@ function initializeDatabase() {
 
   try {
     db.run('ALTER TABLE issues ADD COLUMN photo_url TEXT');
+  } catch (_error) {
+    // Column already exists in a previously initialized DB.
+  }
+
+  try {
+    db.run('ALTER TABLE issues ADD COLUMN photo_urls TEXT');
   } catch (_error) {
     // Column already exists in a previously initialized DB.
   }
@@ -210,6 +217,15 @@ function initializeDatabase() {
 }
 
 function issueRowToObject(row) {
+  let photoUrls = [];
+  try {
+    photoUrls = row.photo_urls ? JSON.parse(row.photo_urls) : [];
+  } catch (_error) {
+    photoUrls = [];
+  }
+
+  if (!photoUrls.length && row.photo_url) photoUrls = [row.photo_url];
+
   return {
     id: row.id,
     title: row.title,
@@ -224,7 +240,8 @@ function issueRowToObject(row) {
     status: row.status,
     contractor: row.contractor,
     summary: row.summary || '',
-    photoUrl: row.photo_url || ''
+    photoUrl: row.photo_url || '',
+    photoUrls
   };
 }
 
@@ -293,7 +310,7 @@ async function analyzeIssueImage(imageData) {
   if (cachedAnalysis) return cachedAnalysis;
 
   const { buffer, extension } = parseImageData(imageData);
-  const temporaryPath = path.join(uploadDirectory, `analysis-${imageHash}.${extension}`);
+  const temporaryPath = path.join(uploadDirectory, `analysis-${imageHash}-${crypto.randomUUID()}.${extension}`);
   fs.writeFileSync(temporaryPath, buffer);
 
   try {
@@ -317,10 +334,33 @@ async function analyzeIssueImage(imageData) {
   }
 }
 
+function getImageDataList(payload) {
+  const images = Array.isArray(payload?.images)
+    ? payload.images
+    : payload?.imageData
+      ? [payload.imageData]
+      : [];
+
+  if (!images.length) throw new Error('Upload at least one issue photo.');
+  if (images.length > 4) throw new Error('You can upload up to 4 issue photos.');
+  return images;
+}
+
+async function analyzeIssueImages(imageDataList) {
+  const photoAnalyses = await Promise.all(imageDataList.map((imageData) => analyzeIssueImage(imageData)));
+  const primaryAnalysis = [...photoAnalyses].sort((a, b) => b.confidence - a.confidence)[0];
+
+  return {
+    ...primaryAnalysis,
+    summary: `AI detected ${primaryAnalysis.category.toLowerCase()} from ${imageDataList.length} uploaded photo${imageDataList.length === 1 ? '' : 's'} with ${primaryAnalysis.confidence}% confidence.`,
+    photoAnalyses
+  };
+}
+
 initializeDatabase();
 
 app.use(cors());
-app.use(express.json({ limit: '7mb' }));
+app.use(express.json({ limit: '30mb' }));
 app.use('/uploads', express.static(uploadDirectory));
 
 app.get('/api/health', (_req, res) => {
@@ -356,7 +396,8 @@ app.get('/api/issues', (_req, res) => {
 
 app.post('/api/analyze-image', async (req, res) => {
   try {
-    const analysis = await analyzeIssueImage(req.body?.imageData);
+    const imageDataList = getImageDataList(req.body);
+    const analysis = await analyzeIssueImages(imageDataList);
     res.json(analysis);
   } catch (error) {
     console.error('Image analysis failed:', error.message);
@@ -365,23 +406,28 @@ app.post('/api/analyze-image', async (req, res) => {
 });
 
 app.post('/api/issues', async (req, res) => {
-  const { imageData, location, lat, lng } = req.body || {};
-  if (!imageData || !location) {
-    return res.status(400).json({ message: 'an image and location are required' });
+  const { location, lat, lng } = req.body || {};
+  if (!location) {
+    return res.status(400).json({ message: 'a location is required' });
   }
 
   let visionAnalysis;
-  let image;
+  let imageDataList;
+  let images;
   try {
-    visionAnalysis = await analyzeIssueImage(imageData);
-    image = parseImageData(imageData);
+    imageDataList = getImageDataList(req.body);
+    visionAnalysis = await analyzeIssueImages(imageDataList);
+    images = imageDataList.map((imageData) => parseImageData(imageData));
   } catch (error) {
     return res.status(422).json({ message: error.message || 'Unable to analyze this image.' });
   }
 
-  const imageFileName = `${Date.now()}-${crypto.randomUUID()}.${image.extension}`;
-  fs.writeFileSync(path.join(uploadDirectory, imageFileName), image.buffer);
-  const photoUrl = `/uploads/${imageFileName}`;
+  const photoUrls = images.map((image) => {
+    const imageFileName = `${Date.now()}-${crypto.randomUUID()}.${image.extension}`;
+    fs.writeFileSync(path.join(uploadDirectory, imageFileName), image.buffer);
+    return `/uploads/${imageFileName}`;
+  });
+  const photoUrl = photoUrls[0];
   const description = visionAnalysis.summary;
   const newIssue = {
     id: `issue-${Date.now()}`,
@@ -397,12 +443,13 @@ app.post('/api/issues', async (req, res) => {
     status: 'Awaiting contractor allotment',
     contractor: 'Pending allocation',
     summary: visionAnalysis.summary,
-    photoUrl
+    photoUrl,
+    photoUrls
   };
 
   db.run(
-    `INSERT INTO issues (id, title, description, category, location, lat, lng, severity, authenticity, affectedPeople, status, contractor, summary, photo_url, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO issues (id, title, description, category, location, lat, lng, severity, authenticity, affectedPeople, status, contractor, summary, photo_url, photo_urls, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       newIssue.id,
       newIssue.title,
@@ -418,6 +465,7 @@ app.post('/api/issues', async (req, res) => {
       newIssue.contractor,
       newIssue.summary,
       newIssue.photoUrl,
+      JSON.stringify(photoUrls),
       Date.now()
     ]
   );
@@ -434,7 +482,7 @@ app.delete('/api/issues/:id', (req, res) => {
     return res.status(400).json({ message: 'Issue id is required' });
   }
 
-  const existingIssueStatement = db.prepare('SELECT photo_url FROM issues WHERE id = ?');
+  const existingIssueStatement = db.prepare('SELECT photo_url, photo_urls FROM issues WHERE id = ?');
   existingIssueStatement.bind([id]);
   const existingIssue = existingIssueStatement.step() ? existingIssueStatement.getAsObject() : null;
   existingIssueStatement.free();
@@ -444,9 +492,16 @@ app.delete('/api/issues/:id', (req, res) => {
     return res.status(404).json({ message: 'Issue not found' });
   }
 
-  if (existingIssue?.photo_url) {
-    fs.rmSync(path.join(uploadDirectory, path.basename(existingIssue.photo_url)), { force: true });
+  let photoUrls = [];
+  try {
+    photoUrls = existingIssue?.photo_urls ? JSON.parse(existingIssue.photo_urls) : [];
+  } catch (_error) {
+    photoUrls = [];
   }
+  if (!photoUrls.length && existingIssue?.photo_url) photoUrls = [existingIssue.photo_url];
+  photoUrls.forEach((photoUrl) => {
+    fs.rmSync(path.join(uploadDirectory, path.basename(photoUrl)), { force: true });
+  });
 
   saveDatabase();
   cache.del('issues');

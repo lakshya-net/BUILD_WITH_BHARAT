@@ -292,12 +292,37 @@ button:focus-visible,
 }
 
 .photo-preview {
-  max-height: 220px;
+  height: 150px;
 }
 
 .issue-photo {
-  height: 150px;
-  margin: 4px 0;
+  height: 130px;
+}
+
+.photo-preview-grid,
+.issue-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.selected-photo {
+  position: relative;
+}
+
+.remove-photo-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(185, 28, 28, 0.94);
+  font-size: 0.75rem;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.18);
+}
+
+.remove-photo-btn:hover {
+  background: #991b1b;
 }
 
 .analysis-card {
